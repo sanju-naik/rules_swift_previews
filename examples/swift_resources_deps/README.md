@@ -17,7 +17,7 @@ swift_resources_deps/
 
 ## Requirements
 
-This example uses [rules_swift_resources](https://github.com/jeffhodsdon/SwiftResources) from the Bazel Central Registry.
+This example uses [rules_swift_resources](https://github.com/vincehodsdon/SwiftResources) from the Bazel Central Registry.
 
 ## Usage
 
