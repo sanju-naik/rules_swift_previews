@@ -44,6 +44,8 @@ def generate_package_swift(
     if extra_excludes == None:
         extra_excludes = []
 
+    normalized_name = name[:-5] if name.endswith("Views") and len(name) > 5 else name
+
     # Filter out resource modules from dep_modules to avoid duplicates
     filtered_dep_modules = [m for m in dep_modules if m not in resource_modules]
 
@@ -69,11 +71,11 @@ def generate_package_swift(
         "import PackageDescription",
         "",
         "let package = Package(",
-        '    name: "{name}",'.format(name = name),
+        '    name: "{name}",'.format(name = normalized_name),
         '    defaultLocalization: "en",',
         "    platforms: [{platforms}],".format(platforms = platforms_str),
         "    products: [",
-        '        .library(name: "{name}", targets: ["{name}"]),'.format(name = name),
+        '        .library(name: "{name}", targets: ["{name}"]),'.format(name = normalized_name),
         "    ],",
         "    dependencies: [",
         "    ],",
@@ -165,7 +167,7 @@ def generate_package_swift(
 
     lines.extend([
         "        .target(",
-        '            name: "{name}",'.format(name = name),
+        '            name: "{name}",'.format(name = normalized_name),
         "            dependencies: [{deps}],".format(deps = deps_str),
         '            path: ".",',
         "            exclude: [{excludes}]".format(excludes = exclude_str),

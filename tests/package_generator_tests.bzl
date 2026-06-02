@@ -199,6 +199,27 @@ def _deps_filter_unavailable_test_impl(ctx):
 _deps_filter_unavailable_test = unittest.make(_deps_filter_unavailable_test_impl)
 
 # =============================================================================
+# Test: Strip trailing Views suffix from package name
+# =============================================================================
+
+def _strip_views_suffix_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "MyAppViews",
+        dep_modules = [],
+        resource_modules = [],
+    )
+
+    asserts.true(env, 'name: "MyApp"' in result)
+    asserts.true(env, '.library(name: "MyApp", targets: ["MyApp"])' in result)
+    asserts.false(env, 'name: "MyAppViews"' in result)
+
+    return unittest.end(env)
+
+_strip_views_suffix_test = unittest.make(_strip_views_suffix_test_impl)
+
+# =============================================================================
 # Test suite
 # =============================================================================
 
@@ -217,4 +238,5 @@ def package_generator_test_suite(name):
         _resource_filtering_test,
         _no_self_deps_test,
         _deps_filter_unavailable_test,
+        _strip_views_suffix_test,
     )
