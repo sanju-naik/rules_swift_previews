@@ -70,6 +70,7 @@ def generate_package_swift(
         "",
         "let package = Package(",
         '    name: "{name}",'.format(name = name),
+        '    defaultLocalization: "en",',
         "    platforms: [{platforms}],".format(platforms = platforms_str),
         "    products: [",
         '        .library(name: "{name}", targets: ["{name}"]),'.format(name = name),
@@ -116,7 +117,7 @@ def generate_package_swift(
         deps = module_deps.get(module, [])
         deps = [d for d in deps if d in all_modules and d != module]
         deps_str = ", ".join(['"{}"'.format(d) for d in deps])
-        lines.append('        .target(name: "{module}", dependencies: [{deps}], path: ".deps/{module}"),'.format(
+        lines.append('        .target(name: "{module}", dependencies: [{deps}], path: ".deps/{module}", exclude: ["Package.swift"]),'.format(
             module = module,
             deps = deps_str,
         ))

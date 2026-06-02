@@ -264,7 +264,7 @@ _BASE_ATTRS = {
         default = [],
         doc = "Additional directories/files to exclude from the main SPM target",
     ),
-    "ios_version": attr.string(default = "18"),
+    "ios_version": attr.string(default = "15"),
     "macos_version": attr.string(default = ""),
     "tvos_version": attr.string(default = ""),
     "watchos_version": attr.string(default = ""),
