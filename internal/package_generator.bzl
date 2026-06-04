@@ -46,6 +46,36 @@ def generate_package_swift(
 
     normalized_name = name[:-5] if name.endswith("Views") and len(name) > 5 else name
 
+    swift_modules = [normalized_name] + dep_modules
+    resource_owner = {}
+    separate_resource_modules = []
+    for res_module in resource_modules:
+        owner = None
+        if res_module.endswith("Resources") and len(res_module) > len("Resources"):
+            owner_candidate = res_module[:-len("Resources")]
+            if owner_candidate == name or owner_candidate == normalized_name:
+                owner = normalized_name
+            elif owner_candidate in swift_modules:
+                owner = owner_candidate
+        elif res_module in swift_modules and not res_module.endswith("Resources"):
+            owner = res_module
+
+        if owner:
+            if owner not in resource_owner:
+                resource_owner[owner] = []
+            resource_owner[owner].append(res_module)
+        else:
+            separate_resource_modules.append(res_module)
+
+    main_resource_modules = resource_owner.get(normalized_name, [])
+    merged_resource_modules = []
+    for modules in resource_owner.values():
+        merged_resource_modules.extend(modules)
+    merged_resource_to_owner = {}
+    for owner, modules in resource_owner.items():
+        for module in modules:
+            merged_resource_to_owner[module] = owner
+
     # Filter out resource modules from dep_modules to avoid duplicates
     filtered_dep_modules = [m for m in dep_modules if m not in resource_modules]
 
@@ -83,7 +113,7 @@ def generate_package_swift(
     ]
 
     # All available modules (for filtering deps)
-    all_modules = set(filtered_dep_modules + list(resource_modules) + cc_modules + objc_modules)
+    all_modules = set(filtered_dep_modules + list(separate_resource_modules) + cc_modules + objc_modules)
 
     # Add C/C++ module targets first (they're typically at the bottom of the dependency tree)
     for module in cc_modules:
@@ -117,15 +147,38 @@ def generate_package_swift(
     for module in filtered_dep_modules:
         # Get deps from module_deps, filter to only include modules we have
         deps = module_deps.get(module, [])
-        deps = [d for d in deps if d in all_modules and d != module]
-        deps_str = ", ".join(['"{}"'.format(d) for d in deps])
-        lines.append('        .target(name: "{module}", dependencies: [{deps}], path: ".deps/{module}", exclude: ["Package.swift"]),'.format(
-            module = module,
-            deps = deps_str,
-        ))
+        resolved_deps = []
+        seen_resolved = set()
+        for dep in deps:
+            resolved_dep = merged_resource_to_owner.get(dep, dep)
+            if resolved_dep in all_modules and resolved_dep != module and resolved_dep not in seen_resolved:
+                seen_resolved.add(resolved_dep)
+                resolved_deps.append(resolved_dep)
+        deps_str = ", ".join(['"{}"'.format(d) for d in resolved_deps])
+
+        dep_resources_str = ""
+        if module in resource_owner:
+            dep_resource_entries = [
+                '.process("{}/Resources")'.format(res_module)
+                for res_module in resource_owner[module]
+            ]
+            dep_resources_str = "            resources: [{}],".format(", ".join(dep_resource_entries))
+
+        lines.extend([
+            "        .target(",
+            '            name: "{module}",'.format(module = module),
+            "            dependencies: [{deps}],".format(deps = deps_str),
+            '            path: ".deps/{module}",'.format(module = module),
+            '            exclude: ["Package.swift"],',
+        ])
+
+        if dep_resources_str:
+            lines.append(dep_resources_str)
+
+        lines.append("        ),")
 
     # Add resource module targets - also in .deps/
-    for res_module in resource_modules:
+    for res_module in separate_resource_modules:
         lines.extend([
             "        .target(",
             '            name: "{name}",'.format(name = res_module),
@@ -137,7 +190,7 @@ def generate_package_swift(
 
     # Add main view target - path is "." (the Views directory itself)
     # Include all module types in dependencies
-    all_deps = cc_modules + objc_modules + filtered_dep_modules + list(resource_modules)
+    all_deps = cc_modules + objc_modules + filtered_dep_modules + list(separate_resource_modules)
 
     # Remove duplicates while preserving order
     seen = set()
@@ -165,12 +218,26 @@ def generate_package_swift(
     # Format the exclude list
     exclude_str = ", ".join(['"{}"'.format(e) for e in excludes])
 
+    main_resources_str = ""
+    if main_resource_modules:
+        main_resource_entries = [
+            '.process(".deps/{}/Resources")'.format(module)
+            for module in main_resource_modules
+        ]
+        main_resources_str = "            resources: [{}],".format(", ".join(main_resource_entries))
+
     lines.extend([
         "        .target(",
         '            name: "{name}",'.format(name = normalized_name),
         "            dependencies: [{deps}],".format(deps = deps_str),
         '            path: ".",',
         "            exclude: [{excludes}]".format(excludes = exclude_str),
+    ])
+
+    if main_resources_str:
+        lines.append(main_resources_str)
+
+    lines.extend([
         "        ),",
         "    ]",
         ")",

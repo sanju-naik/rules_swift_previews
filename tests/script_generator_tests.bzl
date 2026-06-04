@@ -101,8 +101,8 @@ def _copy_resources_test_impl(ctx):
     asserts.true(env, 'mkdir -p "$DEPS_DIR/Resources/Resources"' in script)
 
     # Check files are copied to Resources subdirectory
-    asserts.true(env, 'cp "$RUNFILES_DIR/_main/res/colors.json" "$DEPS_DIR/Resources/Resources/"' in script)
-    asserts.true(env, 'cp "$RUNFILES_DIR/_main/res/icon.png" "$DEPS_DIR/Resources/Resources/"' in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/res/colors.json" "$DEPS_DIR/Resources/Resources/"' in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/res/icon.png" "$DEPS_DIR/Resources/Resources/"' in script)
 
     # Check generated source is copied to module root
     asserts.true(env, 'cp "$RUNFILES_DIR/_main/Resources.swift" "$DEPS_DIR/Resources/"' in script)
@@ -129,7 +129,7 @@ def _copy_resources_no_source_test_impl(ctx):
 
     # Check resources are still copied
     asserts.true(env, 'mkdir -p "$DEPS_DIR/Resources/Resources"' in script)
-    asserts.true(env, 'cp "$RUNFILES_DIR/_main/fonts/Font.ttf" "$DEPS_DIR/Resources/Resources/"' in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/fonts/Font.ttf" "$DEPS_DIR/Resources/Resources/"' in script)
 
     # No generated source copy should be present
     asserts.false(env, "Resources.swift" in script)
@@ -137,6 +137,76 @@ def _copy_resources_no_source_test_impl(ctx):
     return unittest.end(env)
 
 _copy_resources_no_source_test = unittest.make(_copy_resources_no_source_test_impl)
+
+def _copy_resources_with_owner_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_resources_script_from_paths(
+        {
+            "AsphaltAlohaResources": {
+                "resources": ["res/colors.json"],
+                "generated_source": None,
+            },
+        },
+        main_module_name = "AlohaUIViews",
+        dep_modules = ["AsphaltAloha", "AlohaAssets"],
+    )
+    script = "\n".join(result)
+
+    asserts.true(env, 'mkdir -p "$DEPS_DIR/AsphaltAloha/AsphaltAlohaResources/Resources"' in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/res/colors.json" "$DEPS_DIR/AsphaltAloha/AsphaltAlohaResources/Resources/"' in script)
+
+    return unittest.end(env)
+
+_copy_resources_with_owner_test = unittest.make(_copy_resources_with_owner_test_impl)
+
+def _copy_resources_skips_info_plist_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_resources_script_from_paths({
+        "BundleResources": {
+            "resources": ["res/Info.plist", "res/colors.json"],
+            "generated_source": None,
+        },
+    })
+    script = "\n".join(result)
+
+    asserts.false(env, 'Info.plist" "$DEPS_DIR/BundleResources/Resources/"' in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/res/colors.json" "$DEPS_DIR/BundleResources/Resources/"' in script)
+
+    return unittest.end(env)
+
+_copy_resources_skips_info_plist_test = unittest.make(_copy_resources_skips_info_plist_test_impl)
+
+def _copy_resources_preserves_special_dirs_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_resources_script_from_paths({
+        "BundleResources": {
+            "resources": [
+                "res/Assets.xcassets/Contents.json",
+                "res/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+                "res/en.lproj/Localizable.strings",
+                "res/en.lproj/InfoPlist.strings",
+            ],
+            "generated_source": None,
+        },
+    })
+
+    xcassets_count = 0
+    lproj_count = 0
+    for line in result:
+        if 'cp -R "$RUNFILES_DIR/_main/res/Assets.xcassets" "$DEPS_DIR/BundleResources/Resources/"' == line:
+            xcassets_count += 1
+        if 'cp -R "$RUNFILES_DIR/_main/res/en.lproj" "$DEPS_DIR/BundleResources/Resources/"' == line:
+            lproj_count += 1
+
+    asserts.equals(env, 1, xcassets_count)
+    asserts.equals(env, 1, lproj_count)
+
+    return unittest.end(env)
+
+_copy_resources_preserves_special_dirs_test = unittest.make(_copy_resources_preserves_special_dirs_test_impl)
 
 # =============================================================================
 # Test: generate_package_write_script
@@ -183,5 +253,8 @@ def script_generator_test_suite(name):
         _copy_sources_empty_test,
         _copy_resources_test,
         _copy_resources_no_source_test,
+        _copy_resources_with_owner_test,
+        _copy_resources_skips_info_plist_test,
+        _copy_resources_preserves_special_dirs_test,
         _package_write_script_test,
     )

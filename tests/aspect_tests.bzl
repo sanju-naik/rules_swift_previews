@@ -95,6 +95,35 @@ def _custom_module_name_test_impl(ctx):
 
 custom_module_name_test = analysistest.make(_custom_module_name_test_impl)
 
+def _data_resources_collected_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+
+    info = target[SourceFilesInfo]
+
+    asserts.true(env, "DataBundle" in info.resource_modules)
+    data_resources = info.resource_modules.get("DataBundle", {})
+    asserts.true(env, len(data_resources.get("resources", [])) >= 2)
+
+    return analysistest.end(env)
+
+data_resources_collected_test = analysistest.make(_data_resources_collected_test_impl)
+
+def _data_resources_in_deps_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+
+    info = target[SourceFilesInfo]
+
+    asserts.true(env, "AppWithDataDep" in info.module_deps)
+    app_deps = info.module_deps.get("AppWithDataDep", [])
+    asserts.true(env, "DataLib" in app_deps)
+    asserts.true(env, "DataBundle" in app_deps)
+
+    return analysistest.end(env)
+
+data_resources_in_deps_test = analysistest.make(_data_resources_in_deps_test_impl)
+
 # =============================================================================
 # Test targets setup function
 # =============================================================================
@@ -125,6 +154,18 @@ def aspect_test_suite(name):
         tags = ["manual"],
     )
 
+    aspect_test_rule(
+        name = "data_resources_subject",
+        target = "//tests/fixtures:DataLib",
+        tags = ["manual"],
+    )
+
+    aspect_test_rule(
+        name = "data_resources_dep_subject",
+        target = "//tests/fixtures:AppWithDataDep",
+        tags = ["manual"],
+    )
+
     # Create the analysis tests
     simple_lib_test(
         name = "simple_lib_test",
@@ -141,6 +182,16 @@ def aspect_test_suite(name):
         target_under_test = ":custom_module_subject",
     )
 
+    data_resources_collected_test(
+        name = "data_resources_collected_test",
+        target_under_test = ":data_resources_subject",
+    )
+
+    data_resources_in_deps_test(
+        name = "data_resources_in_deps_test",
+        target_under_test = ":data_resources_dep_subject",
+    )
+
     # Bundle into a test suite
     native.test_suite(
         name = name,
@@ -148,5 +199,7 @@ def aspect_test_suite(name):
             ":simple_lib_test",
             ":lib_with_deps_test",
             ":custom_module_name_test",
+            ":data_resources_collected_test",
+            ":data_resources_in_deps_test",
         ],
     )

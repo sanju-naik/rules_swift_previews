@@ -21,7 +21,7 @@ load(
     "generate_copy_sources_script",
     "generate_package_write_script",
 )
-load("//internal:swift_collector.bzl", "collect_swift_resources", "collect_swift_sources")
+load("//internal:swift_collector.bzl", "collect_apple_bundle_resources", "collect_swift_resources", "collect_swift_sources")
 
 def _source_collector_aspect_impl(target, ctx):
     """Aspect that collects source files from library targets.
@@ -35,6 +35,12 @@ def _source_collector_aspect_impl(target, ctx):
     module_deps = {}
     cc_modules = {}
     objc_modules = {}
+
+    dep_targets = []
+    if hasattr(ctx.rule.attr, "deps"):
+        dep_targets.extend(ctx.rule.attr.deps)
+    if hasattr(ctx.rule.attr, "data"):
+        dep_targets.extend(ctx.rule.attr.data)
 
     # Skip external dependencies
     label = target.label
@@ -60,6 +66,11 @@ def _source_collector_aspect_impl(target, ctx):
         module_name, resource_info = resource_result
         resource_modules[module_name] = resource_info
 
+    apple_bundle_result = collect_apple_bundle_resources(ctx, target)
+    if apple_bundle_result:
+        module_name, resource_info = apple_bundle_result
+        resource_modules[module_name] = resource_info
+
     cc_result = collect_cc_sources(ctx, target)
     if cc_result:
         module_name, cc_info = cc_result
@@ -79,49 +90,70 @@ def _source_collector_aspect_impl(target, ctx):
 
     # Track this module's direct dependencies
     direct_dep_modules = []
-    if hasattr(ctx.rule.attr, "deps"):
-        for dep in ctx.rule.attr.deps:
-            if SourceFilesInfo in dep:
-                dep_info = dep[SourceFilesInfo]
+    for dep in dep_targets:
+        if SourceFilesInfo in dep:
+            dep_info = dep[SourceFilesInfo]
 
-                # Collect module names from all dependency types
-                for name in dep_info.module_sources.keys():
-                    if name not in direct_dep_modules:
-                        direct_dep_modules.append(name)
-                for name in dep_info.resource_modules.keys():
-                    if name not in direct_dep_modules:
-                        direct_dep_modules.append(name)
-                for name in dep_info.cc_modules.keys():
-                    if name not in direct_dep_modules:
-                        direct_dep_modules.append(name)
-                for name in dep_info.objc_modules.keys():
-                    if name not in direct_dep_modules:
-                        direct_dep_modules.append(name)
+            for name in dep_info.module_sources.keys():
+                if name not in direct_dep_modules:
+                    direct_dep_modules.append(name)
+            for name in dep_info.resource_modules.keys():
+                if name not in direct_dep_modules:
+                    direct_dep_modules.append(name)
+            for name in dep_info.cc_modules.keys():
+                if name not in direct_dep_modules:
+                    direct_dep_modules.append(name)
+            for name in dep_info.objc_modules.keys():
+                if name not in direct_dep_modules:
+                    direct_dep_modules.append(name)
+
+    if module_name and hasattr(ctx.rule.attr, "data"):
+        data_files = []
+        for data_dep in ctx.rule.attr.data:
+            if SourceFilesInfo in data_dep:
+                continue
+            if hasattr(data_dep, "files"):
+                data_files.extend(data_dep.files.to_list())
+
+        if data_files:
+            seen = {}
+            deduped_data_files = []
+            for f in data_files:
+                if f.path not in seen:
+                    seen[f.path] = True
+                    deduped_data_files.append(f)
+
+            synthetic_resource_module = "{}Resources".format(module_name)
+            resource_modules[synthetic_resource_module] = {
+                "resources": deduped_data_files,
+                "generated_source": None,
+            }
+            if synthetic_resource_module not in direct_dep_modules:
+                direct_dep_modules.append(synthetic_resource_module)
 
     if module_name:
         module_deps[module_name] = direct_dep_modules
 
     # Collect from dependencies (transitive)
-    if hasattr(ctx.rule.attr, "deps"):
-        for dep in ctx.rule.attr.deps:
-            if SourceFilesInfo in dep:
-                dep_info = dep[SourceFilesInfo]
-                sources.extend(dep_info.sources.to_list())
-                for name, srcs in dep_info.module_sources.items():
-                    if name not in module_sources:
-                        module_sources[name] = srcs
-                for name, res in dep_info.resource_modules.items():
-                    if name not in resource_modules:
-                        resource_modules[name] = res
-                for name, deps in dep_info.module_deps.items():
-                    if name not in module_deps:
-                        module_deps[name] = deps
-                for name, cc_info in dep_info.cc_modules.items():
-                    if name not in cc_modules:
-                        cc_modules[name] = cc_info
-                for name, objc_info in dep_info.objc_modules.items():
-                    if name not in objc_modules:
-                        objc_modules[name] = objc_info
+    for dep in dep_targets:
+        if SourceFilesInfo in dep:
+            dep_info = dep[SourceFilesInfo]
+            sources.extend(dep_info.sources.to_list())
+            for name, srcs in dep_info.module_sources.items():
+                if name not in module_sources:
+                    module_sources[name] = srcs
+            for name, res in dep_info.resource_modules.items():
+                if name not in resource_modules:
+                    resource_modules[name] = res
+            for name, deps in dep_info.module_deps.items():
+                if name not in module_deps:
+                    module_deps[name] = deps
+            for name, cc_info in dep_info.cc_modules.items():
+                if name not in cc_modules:
+                    cc_modules[name] = cc_info
+            for name, objc_info in dep_info.objc_modules.items():
+                if name not in objc_modules:
+                    objc_modules[name] = objc_info
 
     return [SourceFilesInfo(
         sources = depset(sources),
@@ -134,7 +166,7 @@ def _source_collector_aspect_impl(target, ctx):
 
 source_collector_aspect = aspect(
     implementation = _source_collector_aspect_impl,
-    attr_aspects = ["deps"],
+    attr_aspects = ["deps", "data"],
     doc = "Collects source files from swift_library, cc_library, and objc_library targets.",
 )
 
@@ -214,7 +246,11 @@ def swift_previews_package_impl(ctx):
 
     # Handle resources if found
     if resource_modules:
-        script_lines.extend(generate_copy_resources_script(resource_modules))
+        script_lines.extend(generate_copy_resources_script(
+            resource_modules,
+            main_module_name = lib_module_name,
+            dep_modules = list(dep_dirs.keys()),
+        ))
 
     package_swift = generate_package_swift(
         name = lib_module_name,

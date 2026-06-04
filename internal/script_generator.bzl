@@ -34,7 +34,37 @@ def generate_copy_sources_script_from_paths(dep_dirs):
         lines.append("")
     return lines
 
-def generate_copy_resources_script_from_paths(resource_modules):
+def _resource_owner_for_module(res_name, normalized_main_name, original_main_name, swift_modules):
+    owner = None
+    if res_name.endswith("Resources") and len(res_name) > len("Resources"):
+        owner_candidate = res_name[:-len("Resources")]
+        if owner_candidate == original_main_name or owner_candidate == normalized_main_name:
+            owner = normalized_main_name
+        elif owner_candidate in swift_modules:
+            owner = owner_candidate
+    elif res_name in swift_modules and not res_name.endswith("Resources"):
+        owner = res_name
+    return owner
+
+def _directory_copy_root(res_path, suffix):
+    marker = ".{}".format(suffix)
+    idx = res_path.find(marker)
+    if idx == -1:
+        return None
+    return res_path[:idx + len(marker)]
+
+def _resource_copy_source(res_path):
+    xcassets_root = _directory_copy_root(res_path, "xcassets")
+    if xcassets_root:
+        return xcassets_root
+
+    lproj_root = _directory_copy_root(res_path, "lproj")
+    if lproj_root:
+        return lproj_root
+
+    return res_path
+
+def generate_copy_resources_script_from_paths(resource_modules, main_module_name = "", dep_modules = []):
     """Generate script lines to copy resource files and generated source to .deps/<module>/.
 
     Pure function that takes string paths instead of File objects.
@@ -45,24 +75,39 @@ def generate_copy_resources_script_from_paths(resource_modules):
     Returns:
         List of shell script lines
     """
+    normalized_main_name = main_module_name[:-5] if main_module_name.endswith("Views") and len(main_module_name) > 5 else main_module_name
+    swift_modules = [normalized_main_name] + dep_modules
+
     lines = []
     for res_name, res_info in resource_modules.items():
+        owner = _resource_owner_for_module(res_name, normalized_main_name, main_module_name, swift_modules)
+        target_root = "$DEPS_DIR/{name}".format(name = res_name)
+        if owner:
+            target_root = "$DEPS_DIR/{owner}/{name}".format(owner = owner, name = res_name)
+
         lines.append("# Copy {name} resources and generated source".format(name = res_name))
-        lines.append('mkdir -p "$DEPS_DIR/{name}/Resources"'.format(name = res_name))
+        lines.append('mkdir -p "{root}/Resources"'.format(root = target_root))
 
         # Copy resource files
+        copied_sources = {}
         for res_path in res_info.get("resources", []):
-            lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{name}/Resources/"'.format(
-                src = res_path,
-                name = res_name,
+            if res_path.endswith("/Info.plist") or res_path == "Info.plist":
+                continue
+            copy_source = _resource_copy_source(res_path)
+            if copy_source in copied_sources:
+                continue
+            copied_sources[copy_source] = True
+            lines.append('cp -R "$RUNFILES_DIR/_main/{src}" "{root}/Resources/"'.format(
+                src = copy_source,
+                root = target_root,
             ))
 
         # Copy generated Swift source (respects force_unwrap and all other options from original build)
         generated_source = res_info.get("generated_source")
         if generated_source:
-            lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{name}/"'.format(
+            lines.append('cp "$RUNFILES_DIR/_main/{src}" "{root}/"'.format(
                 src = generated_source,
-                name = res_name,
+                root = target_root,
             ))
 
         lines.append("")
@@ -165,7 +210,7 @@ def generate_copy_sources_script(dep_dirs):
     }
     return generate_copy_sources_script_from_paths(path_dict)
 
-def generate_copy_resources_script(resource_modules):
+def generate_copy_resources_script(resource_modules, main_module_name = "", dep_modules = []):
     """Generate script lines to copy resource files and generated source to .deps/<module>/.
 
     Args:
@@ -180,7 +225,11 @@ def generate_copy_resources_script(resource_modules):
             "resources": [f.short_path for f in res_info.get("resources", [])],
             "generated_source": res_info["generated_source"].short_path if res_info.get("generated_source") else None,
         }
-    return generate_copy_resources_script_from_paths(path_dict)
+    return generate_copy_resources_script_from_paths(
+        path_dict,
+        main_module_name = main_module_name,
+        dep_modules = dep_modules,
+    )
 
 def generate_copy_cc_module_script(cc_modules):
     """Generate script lines to copy C/C++ sources and headers to .deps/.

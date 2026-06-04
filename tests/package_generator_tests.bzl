@@ -55,13 +55,13 @@ def _package_with_deps_test_impl(ctx):
     )
 
     # Check dependency targets are created
-    asserts.true(env, '.target(name: "DesignSystem"' in result)
-    asserts.true(env, '.target(name: "Theme"' in result)
+    asserts.true(env, 'name: "DesignSystem"' in result)
+    asserts.true(env, 'name: "Theme"' in result)
     asserts.true(env, 'path: ".deps/DesignSystem"' in result)
     asserts.true(env, 'path: ".deps/Theme"' in result)
 
     # Check Theme has DesignSystem as dependency
-    asserts.true(env, 'name: "Theme", dependencies: ["DesignSystem"]' in result)
+    asserts.true(env, 'dependencies: ["DesignSystem"]' in result)
 
     # Check main target has both deps
     asserts.true(env, 'dependencies: ["DesignSystem", "Theme"]' in result)
@@ -169,7 +169,8 @@ def _no_self_deps_test_impl(ctx):
     )
 
     # DesignSystem should have empty deps, not reference itself
-    asserts.true(env, 'name: "DesignSystem", dependencies: []' in result)
+    asserts.true(env, 'name: "DesignSystem"' in result)
+    asserts.true(env, 'dependencies: []' in result)
 
     return unittest.end(env)
 
@@ -192,7 +193,8 @@ def _deps_filter_unavailable_test_impl(ctx):
     )
 
     # Core should have empty deps since referenced modules don't exist
-    asserts.true(env, 'name: "Core", dependencies: []' in result)
+    asserts.true(env, 'name: "Core"' in result)
+    asserts.true(env, 'dependencies: []' in result)
 
     return unittest.end(env)
 
@@ -220,6 +222,67 @@ def _strip_views_suffix_test_impl(ctx):
 _strip_views_suffix_test = unittest.make(_strip_views_suffix_test_impl)
 
 # =============================================================================
+# Test: Main module resources are folded into main target
+# =============================================================================
+
+def _main_resources_folded_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "AsphaltAlohaViews",
+        dep_modules = ["Core", "AsphaltAlohaResources", "SharedResources"],
+        resource_modules = ["AsphaltAlohaResources", "SharedResources"],
+    )
+
+    asserts.true(env, 'name: "AsphaltAloha"' in result)
+    asserts.true(env, 'resources: [.process("AsphaltAlohaResources/Resources")]' in result)
+
+    # Still emitted as standalone target
+    asserts.true(env, 'path: ".deps/SharedResources"' in result)
+
+    # Main resource module is not emitted as separate target
+    asserts.false(env, 'path: ".deps/AsphaltAlohaResources"' in result)
+
+    return unittest.end(env)
+
+_main_resources_folded_test = unittest.make(_main_resources_folded_test_impl)
+
+# =============================================================================
+# Test: Dependency module resources are folded into dependency target
+# =============================================================================
+
+def _dependency_resources_folded_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "AlohaUIViews",
+        dep_modules = ["AsphaltAloha", "AsphaltAlohaResources", "AlohaAssets", "AlohaAssetsResources"],
+        resource_modules = ["AsphaltAlohaResources", "AlohaAssetsResources"],
+        module_deps = {
+            "AsphaltAloha": ["AlohaAssets", "AlohaAssetsResources", "AsphaltAlohaResources"],
+            "AlohaAssets": ["AlohaAssetsResources"],
+        },
+    )
+
+    # Resource modules should be folded and not emitted as standalone targets
+    asserts.false(env, 'path: ".deps/AsphaltAlohaResources"' in result)
+    asserts.false(env, 'path: ".deps/AlohaAssetsResources"' in result)
+
+    # Dependency targets should include folded resources
+    asserts.true(env, 'name: "AsphaltAloha"' in result)
+    asserts.true(env, '.process("AsphaltAlohaResources/Resources")' in result)
+    asserts.true(env, 'name: "AlohaAssets"' in result)
+    asserts.true(env, '.process("AlohaAssetsResources/Resources")' in result)
+
+    # Main target should no longer depend directly on folded resource modules
+    asserts.false(env, '"AsphaltAlohaResources"],' in result)
+    asserts.false(env, '"AlohaAssetsResources"],' in result)
+
+    return unittest.end(env)
+
+_dependency_resources_folded_test = unittest.make(_dependency_resources_folded_test_impl)
+
+# =============================================================================
 # Test suite
 # =============================================================================
 
@@ -239,4 +302,6 @@ def package_generator_test_suite(name):
         _no_self_deps_test,
         _deps_filter_unavailable_test,
         _strip_views_suffix_test,
+        _main_resources_folded_test,
+        _dependency_resources_folded_test,
     )

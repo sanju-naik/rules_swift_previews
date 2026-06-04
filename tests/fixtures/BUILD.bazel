@@ -4,6 +4,16 @@
 """Test fixtures for aspect analysis tests."""
 
 load("@rules_swift//swift:swift.bzl", "swift_library")
+load(":mock_rules.bzl", "apple_resource_bundle")
+
+apple_resource_bundle(
+    name = "DataBundle",
+    resources = [
+        "Resources/Icon.png",
+        "Resources/Localizable.strings",
+    ],
+    visibility = ["//tests:__subpackages__"],
+)
 
 # Simple library with no dependencies
 swift_library(
@@ -34,5 +44,21 @@ swift_library(
     name = "utils_target",
     srcs = ["Utils.swift"],
     module_name = "Utilities",
+    visibility = ["//tests:__subpackages__"],
+)
+
+swift_library(
+    name = "DataLib",
+    srcs = ["Data.swift"],
+    module_name = "DataLib",
+    data = [":DataBundle"],
+    visibility = ["//tests:__subpackages__"],
+)
+
+swift_library(
+    name = "AppWithDataDep",
+    srcs = ["App.swift"],
+    module_name = "AppWithDataDep",
+    deps = [":DataLib"],
     visibility = ["//tests:__subpackages__"],
 )
