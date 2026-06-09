@@ -14,6 +14,8 @@ SourceFilesInfo = provider(
         # C/C++ modules (from cc_library)
         "cc_modules": "dict mapping module names to {srcs: [...], hdrs: [...]}",
         # Objective-C modules (from objc_library)
-        "objc_modules": "dict mapping module names to {srcs: [...], hdrs: [...]}",
+        "objc_modules": "dict mapping module names to {srcs: [...], hdrs: [...], private_hdrs: [...]}",
+        # XCFramework modules (from data deps/imports)
+        "xcframework_modules": "dict mapping module names to xcframework file lists",
     },
 )

@@ -31,12 +31,26 @@ swift_library(
     visibility = ["//tests:__subpackages__"],
 )
 
+alias(
+    name = "CoreLibAlias",
+    actual = ":CoreLib",
+    visibility = ["//tests:__subpackages__"],
+)
+
 swift_library(
     name = "AppLib",
     srcs = ["App.swift"],
     module_name = "AppLib",
     visibility = ["//tests:__subpackages__"],
     deps = [":CoreLib"],
+)
+
+swift_library(
+    name = "AppLibViaAlias",
+    srcs = ["App.swift"],
+    module_name = "AppLibViaAlias",
+    visibility = ["//tests:__subpackages__"],
+    deps = [":CoreLibAlias"],
 )
 
 # Library with custom module name

@@ -235,7 +235,7 @@ def _main_resources_folded_test_impl(ctx):
     )
 
     asserts.true(env, 'name: "AsphaltAloha"' in result)
-    asserts.true(env, 'resources: [.process("AsphaltAlohaResources/Resources")]' in result)
+    asserts.true(env, 'resources: [.process(".deps/AsphaltAlohaResources/Resources")]' in result)
 
     # Still emitted as standalone target
     asserts.true(env, 'path: ".deps/SharedResources"' in result)
@@ -282,6 +282,54 @@ def _dependency_resources_folded_test_impl(ctx):
 
 _dependency_resources_folded_test = unittest.make(_dependency_resources_folded_test_impl)
 
+def _main_target_path_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "CrossSellWidgetViews",
+        dep_modules = [],
+        resource_modules = [],
+        main_target_path = "Sources/CrossSellWidget",
+    )
+
+    asserts.true(env, 'name: "CrossSellWidget"' in result)
+    asserts.true(env, 'path: "Sources/CrossSellWidget"' in result)
+
+    return unittest.end(env)
+
+_main_target_path_test = unittest.make(_main_target_path_test_impl)
+
+# =============================================================================
+# Test: XCFramework dependencies generate binary targets
+# =============================================================================
+
+def _xcframework_binary_targets_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "AlohaUIViews",
+        dep_modules = ["AsphaltAloha"],
+        resource_modules = [],
+        module_deps = {
+            "AsphaltAloha": ["TrueTime", "GRDB"],
+        },
+        xcframework_modules = ["TrueTime", "GRDB"],
+    )
+
+    asserts.true(env, '.binaryTarget(' in result)
+    asserts.true(env, 'name: "TrueTime"' in result)
+    asserts.true(env, 'path: ".deps/TrueTime/TrueTime.xcframework"' in result)
+    asserts.true(env, 'name: "GRDB"' in result)
+    asserts.true(env, 'path: ".deps/GRDB/GRDB.xcframework"' in result)
+
+    # Swift target deps should include XCFramework binary targets
+    asserts.true(env, 'name: "AsphaltAloha"' in result)
+    asserts.true(env, 'dependencies: ["TrueTime", "GRDB"]' in result)
+
+    return unittest.end(env)
+
+_xcframework_binary_targets_test = unittest.make(_xcframework_binary_targets_test_impl)
+
 # =============================================================================
 # Test suite
 # =============================================================================
@@ -304,4 +352,6 @@ def package_generator_test_suite(name):
         _strip_views_suffix_test,
         _main_resources_folded_test,
         _dependency_resources_folded_test,
+        _main_target_path_test,
+        _xcframework_binary_targets_test,
     )

@@ -77,6 +77,24 @@ def _lib_with_deps_test_impl(ctx):
 
 lib_with_deps_test = analysistest.make(_lib_with_deps_test_impl)
 
+def _lib_with_alias_dep_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+
+    info = target[SourceFilesInfo]
+
+    asserts.true(env, "AppLibViaAlias" in info.module_sources)
+    asserts.true(env, "CoreLib" in info.module_sources)
+
+    asserts.true(env, "AppLibViaAlias" in info.module_deps)
+    app_deps = info.module_deps.get("AppLibViaAlias", [])
+    asserts.true(env, "CoreLib" in app_deps)
+    asserts.false(env, "CoreLibAlias" in app_deps)
+
+    return analysistest.end(env)
+
+lib_with_alias_dep_test = analysistest.make(_lib_with_alias_dep_test_impl)
+
 # =============================================================================
 # Test: Custom module name is used
 # =============================================================================
@@ -149,6 +167,12 @@ def aspect_test_suite(name):
     )
 
     aspect_test_rule(
+        name = "lib_with_alias_dep_subject",
+        target = "//tests/fixtures:AppLibViaAlias",
+        tags = ["manual"],
+    )
+
+    aspect_test_rule(
         name = "custom_module_subject",
         target = "//tests/fixtures:utils_target",
         tags = ["manual"],
@@ -177,6 +201,11 @@ def aspect_test_suite(name):
         target_under_test = ":lib_with_deps_subject",
     )
 
+    lib_with_alias_dep_test(
+        name = "lib_with_alias_dep_test",
+        target_under_test = ":lib_with_alias_dep_subject",
+    )
+
     custom_module_name_test(
         name = "custom_module_name_test",
         target_under_test = ":custom_module_subject",
@@ -198,6 +227,7 @@ def aspect_test_suite(name):
         tests = [
             ":simple_lib_test",
             ":lib_with_deps_test",
+            ":lib_with_alias_dep_test",
             ":custom_module_name_test",
             ":data_resources_collected_test",
             ":data_resources_in_deps_test",

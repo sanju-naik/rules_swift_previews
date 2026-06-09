@@ -64,6 +64,13 @@ def _resource_copy_source(res_path):
 
     return res_path
 
+def _is_skipped_resource_path(res_path):
+    if res_path.endswith("/Info.plist") or res_path == "Info.plist":
+        return True
+    if res_path.endswith(".bundle") or ".bundle/" in res_path:
+        return True
+    return False
+
 def generate_copy_resources_script_from_paths(resource_modules, main_module_name = "", dep_modules = []):
     """Generate script lines to copy resource files and generated source to .deps/<module>/.
 
@@ -80,6 +87,15 @@ def generate_copy_resources_script_from_paths(resource_modules, main_module_name
 
     lines = []
     for res_name, res_info in resource_modules.items():
+        copyable_resources = []
+        for res_path in res_info.get("resources", []):
+            if not _is_skipped_resource_path(res_path):
+                copyable_resources.append(res_path)
+
+        generated_source = res_info.get("generated_source")
+        if not copyable_resources and not generated_source:
+            continue
+
         owner = _resource_owner_for_module(res_name, normalized_main_name, main_module_name, swift_modules)
         target_root = "$DEPS_DIR/{name}".format(name = res_name)
         if owner:
@@ -90,9 +106,7 @@ def generate_copy_resources_script_from_paths(resource_modules, main_module_name
 
         # Copy resource files
         copied_sources = {}
-        for res_path in res_info.get("resources", []):
-            if res_path.endswith("/Info.plist") or res_path == "Info.plist":
-                continue
+        for res_path in copyable_resources:
             copy_source = _resource_copy_source(res_path)
             if copy_source in copied_sources:
                 continue
@@ -103,7 +117,6 @@ def generate_copy_resources_script_from_paths(resource_modules, main_module_name
             ))
 
         # Copy generated Swift source (respects force_unwrap and all other options from original build)
-        generated_source = res_info.get("generated_source")
         if generated_source:
             lines.append('cp "$RUNFILES_DIR/_main/{src}" "{root}/"'.format(
                 src = generated_source,
@@ -164,10 +177,32 @@ def generate_copy_objc_module_script_from_paths(objc_modules):
     Returns:
         List of shell script lines
     """
+    def private_header_dest_path(module_name, hdr_path):
+        if module_name != "SSZipArchive":
+            parts = hdr_path.split("/")
+            return parts[-1]
+
+        parts = hdr_path.split("/")
+        if len(parts) <= 1:
+            return hdr_path
+
+        # Prefer trimming up to the last segment matching module name.
+        last_module_idx = -1
+        for i, part in enumerate(parts[:-1]):
+            if part == module_name:
+                last_module_idx = i
+
+        if last_module_idx != -1 and last_module_idx < len(parts) - 1:
+            return "/".join(parts[last_module_idx + 1:])
+
+        # Fallback: drop first leading directory.
+        return "/".join(parts[1:])
+
     lines = []
     for module_name, file_info in objc_modules.items():
         src_paths = file_info.get("srcs", [])
         hdr_paths = file_info.get("hdrs", [])
+        private_hdr_paths = file_info.get("private_hdrs", [])
 
         lines.append("# Copy {module} Objective-C module".format(module = module_name))
         lines.append('mkdir -p "$DEPS_DIR/{module}"'.format(module = module_name))
@@ -176,6 +211,19 @@ def generate_copy_objc_module_script_from_paths(objc_modules):
         for src_path in src_paths:
             lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{module}/"'.format(
                 src = src_path,
+                module = module_name,
+            ))
+
+        for hdr_path in private_hdr_paths:
+            dest_hdr_path = private_header_dest_path(module_name, hdr_path)
+            if "/" in dest_hdr_path:
+                lines.append('mkdir -p "$DEPS_DIR/{module}/$(dirname "{hdr}")"'.format(
+                    hdr = dest_hdr_path,
+                    module = module_name,
+                ))
+            lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{module}/{dest}"'.format(
+                src = hdr_path,
+                dest = dest_hdr_path,
                 module = module_name,
             ))
 
@@ -188,6 +236,47 @@ def generate_copy_objc_module_script_from_paths(objc_modules):
                     module = module_name,
                 ))
 
+        lines.append("")
+    return lines
+
+def generate_copy_xcframework_script_from_paths(xcframework_modules):
+    """Generate script lines to copy XCFramework directories to .deps/.
+
+    Args:
+        xcframework_modules: dict mapping module_name -> xcframework root short_path
+
+    Returns:
+        List of shell script lines
+    """
+    def _trim_parent_segments(path):
+        trimmed = path
+        for _i in range(8):
+            if trimmed.startswith("../"):
+                trimmed = trimmed[3:]
+        return trimmed
+
+    lines = []
+    for module_name, xcframework_path in xcframework_modules.items():
+        normalized_path = _trim_parent_segments(xcframework_path)
+        lines.append("# Copy {module} xcframework".format(module = module_name))
+        lines.append('mkdir -p "$DEPS_DIR/{module}"'.format(module = module_name))
+        lines.append('SRC_XCFRAMEWORK="$BUILD_WORKSPACE_DIRECTORY/{src}"'.format(src = xcframework_path))
+        lines.append('if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/{src}"; fi'.format(src = xcframework_path))
+        lines.append('if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/{src}"; fi'.format(src = xcframework_path))
+        lines.append('if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/external/{src}"; fi'.format(src = normalized_path))
+        lines.append('if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/external/{src}"; fi'.format(src = normalized_path))
+        lines.append('if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/{src}"; fi'.format(src = normalized_path))
+        lines.append('if [ -n "$SRC_XCFRAMEWORK" ] && [ -d "$SRC_XCFRAMEWORK" ]; then')
+        lines.append('  _LINK="$(readlink "$SRC_XCFRAMEWORK/Info.plist" 2>/dev/null || true)"')
+        lines.append('  if [ -n "$_LINK" ]; then')
+        lines.append('    _RESOLVED="$(cd "$SRC_XCFRAMEWORK" && cd "$(dirname "$_LINK")" 2>/dev/null && pwd -P)"')
+        lines.append('    if [ -n "$_RESOLVED" ] && [ -d "$_RESOLVED" ]; then SRC_XCFRAMEWORK="$_RESOLVED"; fi')
+        lines.append('  fi')
+        lines.append('fi')
+        lines.append('if [ -z "$SRC_XCFRAMEWORK" ] || [ ! -d "$SRC_XCFRAMEWORK" ]; then echo "Warning: XCFramework not found for {module}: {src}"; else echo "Using XCFramework source for {module}: $SRC_XCFRAMEWORK"; rm -rf "$DEPS_DIR/{module}/{module}.xcframework" && ditto "$SRC_XCFRAMEWORK" "$DEPS_DIR/{module}/{module}.xcframework"; fi'.format(
+            module = module_name,
+            src = xcframework_path,
+        ))
         lines.append("")
     return lines
 
@@ -262,8 +351,20 @@ def generate_copy_objc_module_script(objc_modules):
         path_dict[module_name] = {
             "srcs": [f.short_path for f in file_info.get("srcs", [])],
             "hdrs": [f.short_path for f in file_info.get("hdrs", [])],
+            "private_hdrs": [f.short_path for f in file_info.get("private_hdrs", [])],
         }
     return generate_copy_objc_module_script_from_paths(path_dict)
+
+def generate_copy_xcframework_script(xcframework_modules):
+    """Generate script lines to copy XCFramework directories to .deps/.
+
+    Args:
+        xcframework_modules: dict mapping module_name -> xcframework root short_path
+
+    Returns:
+        List of shell script lines
+    """
+    return generate_copy_xcframework_script_from_paths(xcframework_modules)
 
 def generate_base_script(package_dir):
     """Generate the base shell script setup lines.

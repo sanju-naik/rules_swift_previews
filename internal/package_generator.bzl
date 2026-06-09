@@ -10,7 +10,9 @@ def generate_package_swift(
         module_deps = None,
         cc_modules = None,
         objc_modules = None,
+    xcframework_modules = None,
         extra_excludes = None,
+    main_target_path = ".",
         ios_version = "18",
         macos_version = "",
         tvos_version = "",
@@ -25,7 +27,9 @@ def generate_package_swift(
         module_deps: Dict mapping module names to their dependency module names
         cc_modules: List of C/C++ module names
         objc_modules: List of Objective-C module names
+        xcframework_modules: List of XCFramework module names
         extra_excludes: Additional directories/files to exclude from main target
+        main_target_path: Relative path to the main target sources
         ios_version: iOS deployment target version
         macos_version: macOS deployment target version (empty to omit)
         tvos_version: tvOS deployment target version (empty to omit)
@@ -41,6 +45,8 @@ def generate_package_swift(
         cc_modules = []
     if objc_modules == None:
         objc_modules = []
+    if xcframework_modules == None:
+        xcframework_modules = []
     if extra_excludes == None:
         extra_excludes = []
 
@@ -113,7 +119,16 @@ def generate_package_swift(
     ]
 
     # All available modules (for filtering deps)
-    all_modules = set(filtered_dep_modules + list(separate_resource_modules) + cc_modules + objc_modules)
+    all_modules = set(filtered_dep_modules + list(separate_resource_modules) + cc_modules + objc_modules + xcframework_modules)
+
+    # Add XCFramework binary targets
+    for module in xcframework_modules:
+        lines.extend([
+            "        .binaryTarget(",
+            '            name: "{module}",'.format(module = module),
+            '            path: ".deps/{module}/{module}.xcframework"'.format(module = module),
+            "        ),",
+        ])
 
     # Add C/C++ module targets first (they're typically at the bottom of the dependency tree)
     for module in cc_modules:
@@ -190,7 +205,7 @@ def generate_package_swift(
 
     # Add main view target - path is "." (the Views directory itself)
     # Include all module types in dependencies
-    all_deps = cc_modules + objc_modules + filtered_dep_modules + list(separate_resource_modules)
+    all_deps = cc_modules + objc_modules + xcframework_modules + filtered_dep_modules + list(separate_resource_modules)
 
     # Remove duplicates while preserving order
     seen = set()
@@ -230,7 +245,7 @@ def generate_package_swift(
         "        .target(",
         '            name: "{name}",'.format(name = normalized_name),
         "            dependencies: [{deps}],".format(deps = deps_str),
-        '            path: ".",',
+            '            path: "{path}",'.format(path = main_target_path),
         "            exclude: [{excludes}]".format(excludes = exclude_str),
     ])
 

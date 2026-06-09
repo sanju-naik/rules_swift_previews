@@ -7,6 +7,8 @@ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//internal:script_generator.bzl",
     "generate_base_script",
+    "generate_copy_objc_module_script_from_paths",
+    "generate_copy_xcframework_script_from_paths",
     "generate_copy_resources_script_from_paths",
     "generate_copy_sources_script_from_paths",
     "generate_package_write_script",
@@ -208,6 +210,114 @@ def _copy_resources_preserves_special_dirs_test_impl(ctx):
 
 _copy_resources_preserves_special_dirs_test = unittest.make(_copy_resources_preserves_special_dirs_test_impl)
 
+def _copy_resources_skips_bundle_entries_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_resources_script_from_paths({
+        "BundleResources": {
+            "resources": [
+                "res/MyFeature.bundle",
+                "res/MyFeature.bundle/Info.plist",
+                "res/colors.json",
+            ],
+            "generated_source": None,
+        },
+    })
+    script = "\n".join(result)
+
+    asserts.false(env, "MyFeature.bundle" in script)
+    asserts.true(env, 'cp -R "$RUNFILES_DIR/_main/res/colors.json" "$DEPS_DIR/BundleResources/Resources/"' in script)
+
+    return unittest.end(env)
+
+_copy_resources_skips_bundle_entries_test = unittest.make(_copy_resources_skips_bundle_entries_test_impl)
+
+def _copy_resources_bundle_only_module_skipped_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_resources_script_from_paths({
+        "BundleResources": {
+            "resources": [
+                "res/MyFeature.bundle",
+                "res/MyFeature.bundle/Info.plist",
+            ],
+            "generated_source": None,
+        },
+    })
+
+    asserts.equals(env, [], result)
+
+    return unittest.end(env)
+
+_copy_resources_bundle_only_module_skipped_test = unittest.make(_copy_resources_bundle_only_module_skipped_test_impl)
+
+def _copy_xcframeworks_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_xcframework_script_from_paths({
+        "TrueTime": "Frameworks/TrueTime.xcframework",
+        "GRDB": "third_party/GRDB.xcframework",
+        "AppsFlyerLib": "../rules_swift_package_manager++swift_deps+swiftpkg_appsflyerframework/remote/archive/AppsFlyerLib-Static-SPM.xcframework",
+    })
+    script = "\n".join(result)
+
+    asserts.true(env, 'mkdir -p "$DEPS_DIR/TrueTime"' in script)
+    asserts.true(env, 'SRC_XCFRAMEWORK="$BUILD_WORKSPACE_DIRECTORY/Frameworks/TrueTime.xcframework"' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/Frameworks/TrueTime.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/Frameworks/TrueTime.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/external/Frameworks/TrueTime.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/external/Frameworks/TrueTime.xcframework"; fi' in script)
+    asserts.true(env, '  _LINK="$(readlink "$SRC_XCFRAMEWORK/Info.plist" 2>/dev/null || true)"' in script)
+    asserts.true(env, 'echo "Using XCFramework source for TrueTime: $SRC_XCFRAMEWORK"' in script)
+    asserts.true(env, 'rm -rf "$DEPS_DIR/TrueTime/TrueTime.xcframework" && ditto "$SRC_XCFRAMEWORK" "$DEPS_DIR/TrueTime/TrueTime.xcframework"' in script)
+    asserts.true(env, 'mkdir -p "$DEPS_DIR/GRDB"' in script)
+    asserts.true(env, 'SRC_XCFRAMEWORK="$BUILD_WORKSPACE_DIRECTORY/third_party/GRDB.xcframework"' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/third_party/GRDB.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/third_party/GRDB.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/_main/external/third_party/GRDB.xcframework"; fi' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/external/third_party/GRDB.xcframework"; fi' in script)
+    asserts.true(env, '  _LINK="$(readlink "$SRC_XCFRAMEWORK/Info.plist" 2>/dev/null || true)"' in script)
+    asserts.true(env, 'echo "Using XCFramework source for GRDB: $SRC_XCFRAMEWORK"' in script)
+    asserts.true(env, 'rm -rf "$DEPS_DIR/GRDB/GRDB.xcframework" && ditto "$SRC_XCFRAMEWORK" "$DEPS_DIR/GRDB/GRDB.xcframework"' in script)
+
+    # External xcframework with ../ prefix (bzlmod SPM deps)
+    asserts.true(env, 'mkdir -p "$DEPS_DIR/AppsFlyerLib"' in script)
+    asserts.true(env, 'if [ ! -d "$SRC_XCFRAMEWORK" ]; then SRC_XCFRAMEWORK="$RUNFILES_DIR/rules_swift_package_manager++swift_deps+swiftpkg_appsflyerframework/remote/archive/AppsFlyerLib-Static-SPM.xcframework"; fi' in script)
+    asserts.true(env, 'rm -rf "$DEPS_DIR/AppsFlyerLib/AppsFlyerLib.xcframework" && ditto "$SRC_XCFRAMEWORK" "$DEPS_DIR/AppsFlyerLib/AppsFlyerLib.xcframework"' in script)
+
+    return unittest.end(env)
+
+_copy_xcframeworks_test = unittest.make(_copy_xcframeworks_test_impl)
+
+def _copy_objc_modules_with_private_headers_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_objc_module_script_from_paths({
+        "ObjCBridge": {
+            "srcs": ["objc/SystemBridge.m"],
+            "hdrs": ["objc/PublicHeader.h"],
+            "private_hdrs": ["objc/private/PrivateHeader.h", "objc/minizip/mz_compat.h"],
+        },
+        "SSZipArchive": {
+            "srcs": ["Pods/SSZipArchive/SSZipArchive/SSZipArchive.m"],
+            "hdrs": ["Pods/SSZipArchive/SSZipArchive/SSZipArchive.h"],
+            "private_hdrs": ["Pods/SSZipArchive/SSZipArchive/minizip/mz_compat.h"],
+        },
+    })
+    script = "\n".join(result)
+
+    asserts.true(env, 'cp "$RUNFILES_DIR/_main/objc/SystemBridge.m" "$DEPS_DIR/ObjCBridge/"' in script)
+    asserts.true(env, 'cp "$RUNFILES_DIR/_main/objc/private/PrivateHeader.h" "$DEPS_DIR/ObjCBridge/PrivateHeader.h"' in script)
+    asserts.true(env, 'cp "$RUNFILES_DIR/_main/objc/minizip/mz_compat.h" "$DEPS_DIR/ObjCBridge/mz_compat.h"' in script)
+    asserts.true(env, 'cp "$RUNFILES_DIR/_main/objc/PublicHeader.h" "$DEPS_DIR/ObjCBridge/include/"' in script)
+
+    asserts.true(env, 'mkdir -p "$DEPS_DIR/SSZipArchive/$(dirname "minizip/mz_compat.h")"' in script)
+    asserts.true(env, 'cp "$RUNFILES_DIR/_main/Pods/SSZipArchive/SSZipArchive/minizip/mz_compat.h" "$DEPS_DIR/SSZipArchive/minizip/mz_compat.h"' in script)
+
+    return unittest.end(env)
+
+_copy_objc_modules_with_private_headers_test = unittest.make(_copy_objc_modules_with_private_headers_test_impl)
+
 # =============================================================================
 # Test: generate_package_write_script
 # =============================================================================
@@ -256,5 +366,9 @@ def script_generator_test_suite(name):
         _copy_resources_with_owner_test,
         _copy_resources_skips_info_plist_test,
         _copy_resources_preserves_special_dirs_test,
+        _copy_resources_skips_bundle_entries_test,
+        _copy_resources_bundle_only_module_skipped_test,
+        _copy_xcframeworks_test,
+        _copy_objc_modules_with_private_headers_test,
         _package_write_script_test,
     )
