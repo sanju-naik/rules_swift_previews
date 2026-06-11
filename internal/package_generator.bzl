@@ -11,8 +11,13 @@ def generate_package_swift(
         cc_modules = None,
         objc_modules = None,
     xcframework_modules = None,
+    binary_xcfw_modules = None,
+    binary_module_renames = None,
+    swift6_modules = None,
+    detected_swift6_modules = None,
         extra_excludes = None,
     main_target_path = ".",
+    main_target_sources = None,
         ios_version = "18",
         macos_version = "",
         tvos_version = "",
@@ -30,6 +35,11 @@ def generate_package_swift(
         xcframework_modules: List of XCFramework module names
         extra_excludes: Additional directories/files to exclude from main target
         main_target_path: Relative path to the main target sources
+        main_target_sources: Optional explicit list of package-root-relative
+            source paths for the main target. Set when the main module's sources
+            are scattered across multiple top-level directories (main_target_path
+            == "."); emitted as a SwiftPM `sources:` array so SwiftPM compiles
+            exactly these files instead of scanning the whole package root.
         ios_version: iOS deployment target version
         macos_version: macOS deployment target version (empty to omit)
         tvos_version: tvOS deployment target version (empty to omit)
@@ -47,8 +57,21 @@ def generate_package_swift(
         objc_modules = []
     if xcframework_modules == None:
         xcframework_modules = []
+    if binary_xcfw_modules == None:
+        binary_xcfw_modules = []
+    if binary_module_renames == None:
+        binary_module_renames = {}
+    if swift6_modules == None:
+        swift6_modules = []
+    if detected_swift6_modules == None:
+        detected_swift6_modules = []
     if extra_excludes == None:
         extra_excludes = []
+
+    swift6_set = {m: True for m in swift6_modules}
+
+    def _xcfw_bundle_name(module):
+        return module.replace("-", "_").replace(".", "_")
 
     normalized_name = name[:-5] if name.endswith("Views") and len(name) > 5 else name
 
@@ -100,9 +123,28 @@ def generate_package_swift(
 
     platforms_str = ", ".join(platform_entries) if platform_entries else '.iOS("18.0")'
 
+    # tools-version 6.0 is required so per-target .swiftLanguageMode(.v6) is
+    # available. The package default language mode is pinned to .v5 (see
+    # swiftLanguageModes at the bottom) so only modules explicitly opted into the
+    # rule's swift6_modules attribute compile in Swift 6; everything else keeps
+    # compiling exactly as before.
     lines = [
-        "// swift-tools-version: 5.9",
+        "// swift-tools-version: 6.0",
         "// GENERATED - Regenerate with: bazel run :previews",
+    ]
+
+    # Surface modules whose Bazel target builds with -swift-version 6 as opt-in
+    # candidates. They are NOT forced to v6 (that surfaces strict-concurrency /
+    # @retroactive errors the app's per-module build does not hit); add the ones
+    # that actually need Swift 6 semantics to the swift6_modules attribute.
+    candidates = [m for m in detected_swift6_modules if m not in swift6_set]
+    if candidates:
+        lines.append(
+            "// Bazel Swift-6 module candidates (add to swift6_modules to enable .v6): " +
+            ", ".join(sorted(candidates)),
+        )
+
+    lines.extend([
         "",
         "import PackageDescription",
         "",
@@ -116,10 +158,10 @@ def generate_package_swift(
         "    dependencies: [",
         "    ],",
         "    targets: [",
-    ]
+    ])
 
     # All available modules (for filtering deps)
-    all_modules = set(filtered_dep_modules + list(separate_resource_modules) + cc_modules + objc_modules + xcframework_modules)
+    all_modules = set(filtered_dep_modules + list(separate_resource_modules) + cc_modules + objc_modules + xcframework_modules + binary_xcfw_modules)
 
     # Add XCFramework binary targets
     for module in xcframework_modules:
@@ -130,9 +172,21 @@ def generate_package_swift(
             "        ),",
         ])
 
+    # Add Bazel-built ObjC/C dependency xcframeworks as binary targets. The inner
+    # framework uses a sanitized (identifier-safe) bundle name, while the SwiftPM
+    # target keeps the module name so other targets' dependency lists resolve.
+    for module in binary_xcfw_modules:
+        bundle = _xcfw_bundle_name(module)
+        lines.extend([
+            "        .binaryTarget(",
+            '            name: "{module}",'.format(module = module),
+            '            path: ".deps/{module}/{bundle}.xcframework"'.format(module = module, bundle = bundle),
+            "        ),",
+        ])
+
     # Add C/C++ module targets first (they're typically at the bottom of the dependency tree)
     for module in cc_modules:
-        deps = module_deps.get(module, [])
+        deps = [binary_module_renames.get(d, d) for d in module_deps.get(module, [])]
         deps = [d for d in deps if d in all_modules and d != module]
         deps_str = ", ".join(['"{}"'.format(d) for d in deps])
         lines.extend([
@@ -146,7 +200,7 @@ def generate_package_swift(
 
     # Add Objective-C module targets (typically depend on C modules)
     for module in objc_modules:
-        deps = module_deps.get(module, [])
+        deps = [binary_module_renames.get(d, d) for d in module_deps.get(module, [])]
         deps = [d for d in deps if d in all_modules and d != module]
         deps_str = ", ".join(['"{}"'.format(d) for d in deps])
         lines.extend([
@@ -166,6 +220,7 @@ def generate_package_swift(
         seen_resolved = set()
         for dep in deps:
             resolved_dep = merged_resource_to_owner.get(dep, dep)
+            resolved_dep = binary_module_renames.get(resolved_dep, resolved_dep)
             if resolved_dep in all_modules and resolved_dep != module and resolved_dep not in seen_resolved:
                 seen_resolved.add(resolved_dep)
                 resolved_deps.append(resolved_dep)
@@ -190,6 +245,13 @@ def generate_package_swift(
         if dep_resources_str:
             lines.append(dep_resources_str)
 
+        if module in swift6_set:
+            lines.extend([
+                "            swiftSettings: [",
+                "                .swiftLanguageMode(.v6),",
+                "            ]",
+            ])
+
         lines.append("        ),")
 
     # Add resource module targets - also in .deps/
@@ -205,7 +267,7 @@ def generate_package_swift(
 
     # Add main view target - path is "." (the Views directory itself)
     # Include all module types in dependencies
-    all_deps = cc_modules + objc_modules + xcframework_modules + filtered_dep_modules + list(separate_resource_modules)
+    all_deps = cc_modules + objc_modules + xcframework_modules + binary_xcfw_modules + filtered_dep_modules + list(separate_resource_modules)
 
     # Remove duplicates while preserving order
     seen = set()
@@ -227,8 +289,18 @@ def generate_package_swift(
         "MODULE.bazel.lock",
     ]
 
-    # Add any user-specified extra excludes (for source directories, bazel symlinks, etc.)
-    excludes.extend(extra_excludes)
+    # User-specified extra excludes. Callers typically copy these straight from
+    # the swift_library glob `exclude`, so they are relative to the Bazel package
+    # (e.g. "GoMartNew/src/Foo.swift"). SwiftPM `exclude` paths, however, are
+    # relative to the target's `path`. Strip the main target path prefix so both
+    # the package-relative (BUILD) form and the already-relative form land
+    # correctly. SwiftPM exclude does not support glob/wildcards, so entries
+    # containing glob metacharacters are dropped (they cannot be expressed).
+    strip_prefix = main_target_path + "/" if main_target_path and main_target_path != "." else ""
+    for e in extra_excludes:
+        if "*" in e or "?" in e or "{" in e:
+            continue
+        excludes.append(e[len(strip_prefix):] if strip_prefix and e.startswith(strip_prefix) else e)
 
     # Format the exclude list
     exclude_str = ", ".join(['"{}"'.format(e) for e in excludes])
@@ -241,20 +313,51 @@ def generate_package_swift(
         ]
         main_resources_str = "            resources: [{}],".format(", ".join(main_resource_entries))
 
+    main_is_swift6 = normalized_name in swift6_set or name in swift6_set
+
+    # When the main module's sources are scattered (path == "."), list every
+    # source explicitly so SwiftPM compiles exactly these files rather than
+    # scanning the whole package root (which would sweep in .deps and unrelated
+    # sibling directories that happen to live under the package).
+    sources_line = None
+    if main_target_sources:
+        sources_entries = ", ".join(['"{}"'.format(s) for s in main_target_sources])
+        sources_line = "            sources: [{}]".format(sources_entries)
+
+    exclude_line = "            exclude: [{excludes}]".format(excludes = exclude_str)
+    if sources_line or main_resources_str or main_is_swift6:
+        exclude_line += ","
+
     lines.extend([
         "        .target(",
         '            name: "{name}",'.format(name = normalized_name),
         "            dependencies: [{deps}],".format(deps = deps_str),
             '            path: "{path}",'.format(path = main_target_path),
-        "            exclude: [{excludes}]".format(excludes = exclude_str),
+        exclude_line,
     ])
+
+    if sources_line:
+        if main_resources_str or main_is_swift6:
+            sources_line += ","
+        lines.append(sources_line)
 
     if main_resources_str:
         lines.append(main_resources_str)
 
+    if main_is_swift6:
+        lines.extend([
+            "            swiftSettings: [",
+            "                .swiftLanguageMode(.v6),",
+            "            ]",
+        ])
+
+    # Pin the package default language mode to .v5 so only swift6_modules opt
+    # into Swift 6. tools-version is 6.0, whose implicit default would otherwise
+    # be .v6 for every target.
     lines.extend([
         "        ),",
-        "    ]",
+        "    ],",
+        "    swiftLanguageModes: [.v5]",
         ")",
     ])
 

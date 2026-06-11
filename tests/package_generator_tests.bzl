@@ -20,7 +20,7 @@ def _basic_package_test_impl(ctx):
     )
 
     # Check header
-    asserts.true(env, "// swift-tools-version: 5.9" in result)
+    asserts.true(env, "// swift-tools-version: 6.0" in result)
     asserts.true(env, 'name: "MyApp"' in result)
     asserts.true(env, '.iOS("18.0")' in result)
 
@@ -300,6 +300,69 @@ def _main_target_path_test_impl(ctx):
 _main_target_path_test = unittest.make(_main_target_path_test_impl)
 
 # =============================================================================
+# Test: scattered main sources emit path "." + explicit sources list
+# =============================================================================
+
+def _main_target_scattered_sources_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "GoFoodWidgetViews",
+        dep_modules = [],
+        resource_modules = [],
+        main_target_path = ".",
+        main_target_sources = [
+            "Analytics/FoodWidgetAnalytics/EventName.swift",
+            "GoFoodWidget/Order/OrderStatusView.swift",
+            "Models/FoodCommonModels/FoodError.swift",
+        ],
+    )
+
+    asserts.true(env, 'path: ".",' in result)
+    asserts.true(
+        env,
+        'sources: ["Analytics/FoodWidgetAnalytics/EventName.swift", ' +
+        '"GoFoodWidget/Order/OrderStatusView.swift", ' +
+        '"Models/FoodCommonModels/FoodError.swift"]' in result,
+    )
+
+    return unittest.end(env)
+
+_main_target_scattered_sources_test = unittest.make(_main_target_scattered_sources_test_impl)
+
+# =============================================================================
+# Test: extra_excludes are relativized to the main target path; globs dropped
+# =============================================================================
+
+def _extra_excludes_relativized_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "GoMartNewViews",
+        dep_modules = [],
+        resource_modules = [],
+        main_target_path = "GoMartNew/src",
+        extra_excludes = [
+            "GoMartNew/src/Classes/Common/Models/Brand.swift",
+            "GoMartNew/src/**/*.{plist}",
+            "AlreadyRelative.swift",
+        ],
+    )
+
+    # Package-relative entry is stripped to target-relative.
+    asserts.true(env, '"Classes/Common/Models/Brand.swift"' in result)
+    # The un-prefixed entry passes through untouched.
+    asserts.true(env, '"AlreadyRelative.swift"' in result)
+    # Glob entries cannot be expressed in SwiftPM exclude and are dropped.
+    asserts.false(env, "plist" in result)
+    # The un-stripped package-relative form must not leak through.
+    asserts.false(env, '"GoMartNew/src/Classes/Common/Models/Brand.swift"' in result)
+
+    return unittest.end(env)
+
+_extra_excludes_relativized_test = unittest.make(_extra_excludes_relativized_test_impl)
+
+# =============================================================================
 # Test: XCFramework dependencies generate binary targets
 # =============================================================================
 
@@ -353,5 +416,7 @@ def package_generator_test_suite(name):
         _main_resources_folded_test,
         _dependency_resources_folded_test,
         _main_target_path_test,
+        _main_target_scattered_sources_test,
+        _extra_excludes_relativized_test,
         _xcframework_binary_targets_test,
     )

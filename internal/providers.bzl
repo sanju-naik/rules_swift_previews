@@ -17,5 +17,16 @@ SourceFilesInfo = provider(
         "objc_modules": "dict mapping module names to {srcs: [...], hdrs: [...], private_hdrs: [...]}",
         # XCFramework modules (from data deps/imports)
         "xcframework_modules": "dict mapping module names to xcframework file lists",
+        # ObjC/C external (Pod/SPM) modules to build as static xcframeworks.
+        # dict mapping module name -> {
+        #   "target": str label of the objc/cc library,
+        #   "hdrs": [str labels of public headers],
+        #   "avoid_deps": [str labels of direct library deps],
+        # }
+        "binary_xcfw_modules": "dict mapping module names to xcframework build metadata",
+        # Swift modules whose Bazel target compiles in Swift 6 language mode
+        # (copts contain `-swift-version 6`). These need .swiftLanguageMode(.v6)
+        # in the generated Package.swift; the package default stays .v5.
+        "swift6_modules": "dict mapping Swift module names that require Swift 6 language mode to True",
     },
 )

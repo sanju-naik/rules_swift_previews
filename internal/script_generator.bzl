@@ -126,7 +126,7 @@ def generate_copy_resources_script_from_paths(resource_modules, main_module_name
         lines.append("")
     return lines
 
-def generate_copy_cc_module_script_from_paths(cc_modules):
+def generate_copy_cc_module_script_from_paths(cc_modules, module_map_modules = []):
     """Generate script lines to copy C/C++ sources and headers to .deps/.
 
     Pure function that takes string paths instead of File objects.
@@ -134,6 +134,8 @@ def generate_copy_cc_module_script_from_paths(cc_modules):
 
     Args:
         cc_modules: dict mapping module_name -> {srcs: [paths], hdrs: [paths]}
+        module_map_modules: module names that should get an umbrella-directory
+            module.modulemap (to expose private headers to Swift).
 
     Returns:
         List of shell script lines
@@ -161,11 +163,60 @@ def generate_copy_cc_module_script_from_paths(cc_modules):
                     hdr = hdr_path,
                     module = module_name,
                 ))
+            if module_name in module_map_modules:
+                lines.extend(_emit_umbrella_header_patch_lines(module_name, hdr_paths))
 
         lines.append("")
     return lines
 
-def generate_copy_objc_module_script_from_paths(objc_modules):
+def _emit_umbrella_header_patch_lines(module_name, hdr_paths):
+    """Shell lines that make a module's private headers visible to Swift.
+
+    SwiftPM auto-generates a module map that uses the header matching the module
+    name (e.g. FBLPromises.h) as an umbrella *header*. Only what that umbrella
+    imports ends up in the module, so sibling private/testing headers in the same
+    include/ dir are invisible to Swift consumers (e.g. Promises needs the
+    FBLPromisePrivate.h extension on FBLPromise).
+
+    Rather than ship a competing module.modulemap (which clang rejects with
+    "umbrella ... already covers this directory" alongside SwiftPM's generated
+    map), we append `#import` directives for the sibling headers to the umbrella
+    header itself. #import is idempotent, so re-importing already-included public
+    headers is harmless, and the previously-excluded headers become part of the
+    module via the umbrella SwiftPM already generates.
+    """
+    umbrella = module_name + ".h"
+    siblings = []
+    seen = {}
+    for hdr_path in hdr_paths:
+        basename = hdr_path.split("/")[-1]
+        if basename == umbrella or basename in seen:
+            continue
+        seen[basename] = True
+        siblings.append(basename)
+
+    if not siblings:
+        return []
+
+    siblings = sorted(siblings)
+    lines = [
+        "# Expose sibling headers (incl. private) to Swift consumers of {module}".format(module = module_name),
+        'RSP_UMBRELLA="$DEPS_DIR/{module}/include/{umbrella}"'.format(module = module_name, umbrella = umbrella),
+        'if [ -f "$RSP_UMBRELLA" ]; then',
+        '  cat >> "$RSP_UMBRELLA" <<\'RSP_UMBRELLA_EOF\'',
+        "",
+        "// rules_swift_previews: import sibling headers so private/testing",
+        "// declarations are part of the module and visible to Swift.",
+    ]
+    for basename in siblings:
+        lines.append('#import "{basename}"'.format(basename = basename))
+    lines.extend([
+        "RSP_UMBRELLA_EOF",
+        "fi",
+    ])
+    return lines
+
+def generate_copy_objc_module_script_from_paths(objc_modules, module_map_modules = []):
     """Generate script lines to copy Objective-C sources and headers to .deps/.
 
     Pure function that takes string paths instead of File objects.
@@ -173,6 +224,8 @@ def generate_copy_objc_module_script_from_paths(objc_modules):
 
     Args:
         objc_modules: dict mapping module_name -> {srcs: [paths], hdrs: [paths]}
+        module_map_modules: module names that should get an umbrella-directory
+            module.modulemap (to expose private headers to Swift).
 
     Returns:
         List of shell script lines
@@ -235,6 +288,8 @@ def generate_copy_objc_module_script_from_paths(objc_modules):
                     hdr = hdr_path,
                     module = module_name,
                 ))
+            if module_name in module_map_modules:
+                lines.extend(_emit_umbrella_header_patch_lines(module_name, hdr_paths))
 
         lines.append("")
     return lines
@@ -320,11 +375,13 @@ def generate_copy_resources_script(resource_modules, main_module_name = "", dep_
         dep_modules = dep_modules,
     )
 
-def generate_copy_cc_module_script(cc_modules):
+def generate_copy_cc_module_script(cc_modules, module_map_modules = []):
     """Generate script lines to copy C/C++ sources and headers to .deps/.
 
     Args:
         cc_modules: dict mapping module_name -> {srcs: [File], hdrs: [File]}
+        module_map_modules: module names that should get an umbrella-directory
+            module.modulemap (to expose private headers to Swift).
 
     Returns:
         List of shell script lines
@@ -335,13 +392,15 @@ def generate_copy_cc_module_script(cc_modules):
             "srcs": [f.short_path for f in file_info.get("srcs", [])],
             "hdrs": [f.short_path for f in file_info.get("hdrs", [])],
         }
-    return generate_copy_cc_module_script_from_paths(path_dict)
+    return generate_copy_cc_module_script_from_paths(path_dict, module_map_modules)
 
-def generate_copy_objc_module_script(objc_modules):
+def generate_copy_objc_module_script(objc_modules, module_map_modules = []):
     """Generate script lines to copy Objective-C sources and headers to .deps/.
 
     Args:
         objc_modules: dict mapping module_name -> {srcs: [File], hdrs: [File]}
+        module_map_modules: module names that should get an umbrella-directory
+            module.modulemap (to expose private headers to Swift).
 
     Returns:
         List of shell script lines
@@ -353,7 +412,7 @@ def generate_copy_objc_module_script(objc_modules):
             "hdrs": [f.short_path for f in file_info.get("hdrs", [])],
             "private_hdrs": [f.short_path for f in file_info.get("private_hdrs", [])],
         }
-    return generate_copy_objc_module_script_from_paths(path_dict)
+    return generate_copy_objc_module_script_from_paths(path_dict, module_map_modules)
 
 def generate_copy_xcframework_script(xcframework_modules):
     """Generate script lines to copy XCFramework directories to .deps/.
@@ -365,6 +424,49 @@ def generate_copy_xcframework_script(xcframework_modules):
         List of shell script lines
     """
     return generate_copy_xcframework_script_from_paths(xcframework_modules)
+
+def generate_collect_binary_xcframeworks_script(binary_module_names, xcfw_package_dir):
+    """Generate lines to unzip Bazel-built xcframeworks into .deps/.
+
+    The xcframework zips are produced by the `previews_gen` target into a
+    separate Bazel output base (so the outer `bazel run` lock is not contended).
+    We locate that output base's bazel-bin and unzip each module's archive into
+    `.deps/<name>/<bundle>.xcframework`, preserving internals (and signatures).
+
+    Args:
+        binary_module_names: list of module names (Bazel target / SwiftPM names).
+        xcfw_package_dir: workspace-relative package path holding the generated
+            apple_static_xcframework targets.
+
+    Returns:
+        List of shell script lines.
+    """
+    if not binary_module_names:
+        return []
+
+    lines = [
+        "# Collect Bazel-built ObjC/C xcframeworks into .deps/",
+        'XCFW_OB="${RSP_XCFW_OUTPUT_BASE:-${TMPDIR:-/tmp}/rsp_xcfw_output_base}"',
+        'XCFW_BIN="$(cd "$BUILD_WORKSPACE_DIRECTORY" && bazel --output_base="$XCFW_OB" info bazel-bin 2>/dev/null || true)"',
+        'if [ -z "$XCFW_BIN" ]; then',
+        '  echo "Error: could not locate xcframework build output. Run the *_gen target first." >&2',
+        "  exit 1",
+        "fi",
+    ]
+    for name in binary_module_names:
+        zip_path = '$XCFW_BIN/{pkg}/{name}.xcframework.zip'.format(pkg = xcfw_package_dir, name = name)
+        dest = '$DEPS_DIR/{name}'.format(name = name)
+        lines.extend([
+            'if [ ! -f "{zip}" ]; then'.format(zip = zip_path),
+            '  echo "Error: missing {name}.xcframework.zip; re-run the *_gen target." >&2'.format(name = name),
+            "  exit 1",
+            "fi",
+            'rm -rf "{dest}" && mkdir -p "{dest}"'.format(dest = dest),
+            'unzip -q -o "{zip}" -d "{dest}"'.format(zip = zip_path, dest = dest),
+        ])
+    lines.append('echo "Collected {n} xcframework(s) into .deps/"'.format(n = len(binary_module_names)))
+    lines.append("")
+    return lines
 
 def generate_base_script(package_dir):
     """Generate the base shell script setup lines.
