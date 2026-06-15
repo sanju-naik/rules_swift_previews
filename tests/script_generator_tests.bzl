@@ -85,6 +85,53 @@ def _copy_sources_empty_test_impl(ctx):
 _copy_sources_empty_test = unittest.make(_copy_sources_empty_test_impl)
 
 # =============================================================================
+# Test: copy sources guards imports of excluded modules and applies replacements
+# =============================================================================
+
+def _copy_sources_exclude_and_replace_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_copy_sources_script_from_paths(
+        {
+            "CourierCommonClient": [
+                "deps/CourierCommonClient/EnvelopeMessageAdapter.swift",
+                "deps/CourierCommonClient/CourierConfig.swift",
+            ],
+        },
+        exclude_modules = ["CourierProtos"],
+        replace_sources = {
+            "EnvelopeMessageAdapter.swift": "previews_stubs/EnvelopeMessageAdapter.preview.swift",
+        },
+    )
+    script = "\n".join(result)
+
+    # The replaced source is copied from the replacement path under the original
+    # basename, and the original is never copied directly.
+    asserts.true(
+        env,
+        'cp "$RUNFILES_DIR/_main/previews_stubs/EnvelopeMessageAdapter.preview.swift" ' +
+        '"$DEPS_DIR/CourierCommonClient/EnvelopeMessageAdapter.swift"' in script,
+    )
+    asserts.false(
+        env,
+        'cp "$RUNFILES_DIR/_main/deps/CourierCommonClient/EnvelopeMessageAdapter.swift"' in script,
+    )
+
+    # Non-replaced sources are copied behind a grep guard that skips files
+    # importing the excluded module.
+    asserts.true(env, "grep -qE" in script)
+    asserts.true(env, "CourierProtos" in script)
+    asserts.true(
+        env,
+        'cp "$RUNFILES_DIR/_main/deps/CourierCommonClient/CourierConfig.swift" ' +
+        '"$DEPS_DIR/CourierCommonClient/"' in script,
+    )
+
+    return unittest.end(env)
+
+_copy_sources_exclude_and_replace_test = unittest.make(_copy_sources_exclude_and_replace_test_impl)
+
+# =============================================================================
 # Test: generate_copy_resources_script_from_paths
 # =============================================================================
 
@@ -361,6 +408,7 @@ def script_generator_test_suite(name):
         _base_script_test,
         _copy_sources_test,
         _copy_sources_empty_test,
+        _copy_sources_exclude_and_replace_test,
         _copy_resources_test,
         _copy_resources_no_source_test,
         _copy_resources_with_owner_test,

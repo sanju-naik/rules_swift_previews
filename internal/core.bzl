@@ -628,6 +628,16 @@ def swift_previews_package_impl(ctx):
     main_module_sources = []
 
     exclude_sources = ctx.attr.exclude_sources
+    exclude_module_set = {m: True for m in ctx.attr.exclude_modules}
+
+    # replace_sources is declared as a label-keyed string dict (label ->
+    # basename); invert it to basename -> File so the copy script can swap a
+    # dep source for its excluded-module-free replacement.
+    replace_sources = {}
+    for replacement_target, basename in ctx.attr.replace_sources.items():
+        replacement_files = replacement_target.files.to_list()
+        if replacement_files:
+            replace_sources[basename] = replacement_files[0]
 
     if SourceFilesInfo in lib:
         info = lib[SourceFilesInfo]
@@ -771,11 +781,29 @@ def swift_previews_package_impl(ctx):
         for module_name in info.swift6_modules.keys():
             detected_swift6_modules[module_name] = True
 
+    # Drop fully-excluded modules from every collection so they are neither
+    # copied into .deps nor emitted as targets/binaryTargets. generate_package_swift
+    # applies the same filter to strip them from dependency arrays.
+    if exclude_module_set:
+        dep_dirs = {k: v for k, v in dep_dirs.items() if k not in exclude_module_set}
+        xcframework_modules = {k: v for k, v in xcframework_modules.items() if k not in exclude_module_set}
+        binary_xcfw_modules = {k: v for k, v in binary_xcfw_modules.items() if k not in exclude_module_set}
+        cc_modules = {k: v for k, v in cc_modules.items() if k not in exclude_module_set}
+        objc_modules = {k: v for k, v in objc_modules.items() if k not in exclude_module_set}
+        resource_modules = {k: v for k, v in resource_modules.items() if k not in exclude_module_set}
+        module_deps = {k: v for k, v in module_deps.items() if k not in exclude_module_set}
+
     # Build script
     script_lines = generate_base_script(ctx.attr.package_dir)
 
-    # Copy Swift sources
-    script_lines.extend(generate_copy_sources_script(dep_dirs))
+    # Copy Swift sources. Dep sources that `import` an excluded module are
+    # skipped at copy time (file contents are not available during analysis);
+    # sources matched by replace_sources are swapped for their replacement.
+    script_lines.extend(generate_copy_sources_script(
+        dep_dirs,
+        exclude_modules = ctx.attr.exclude_modules,
+        replace_sources = replace_sources,
+    ))
 
     # Modules kept as source (instead of binarized) need an umbrella-directory
     # module map so Swift consumers can see their private headers (e.g. Promises
@@ -832,6 +860,7 @@ def swift_previews_package_impl(ctx):
         swift6_modules = list(swift6_modules.keys()),
         detected_swift6_modules = list(detected_swift6_modules.keys()),
         extra_excludes = ctx.attr.extra_excludes,
+        exclude_modules = ctx.attr.exclude_modules,
         main_target_path = main_target_path,
         main_target_sources = main_target_sources,
         ios_version = ctx.attr.ios_version,
@@ -853,7 +882,7 @@ def swift_previews_package_impl(ctx):
     # Collect runfiles
     seen_runfiles = {}
     runfiles_files = []
-    for f in all_sources + all_resource_files + all_cc_files + all_objc_files + all_xcframework_files:
+    for f in all_sources + all_resource_files + all_cc_files + all_objc_files + all_xcframework_files + replace_sources.values():
         if f.path not in seen_runfiles:
             seen_runfiles[f.path] = True
             runfiles_files.append(f)
@@ -882,6 +911,15 @@ _BASE_ATTRS = {
     "exclude_sources": attr.string_list(
         default = [],
         doc = "Source file names/suffixes to omit from the package (e.g. \"+Testing.swift\" for unit-test helpers not needed by previews)",
+    ),
+    "exclude_modules": attr.string_list(
+        default = [],
+        doc = "Module names to fully exclude from the generated package. Each module is dropped as a target/binaryTarget, stripped from every other target's dependencies, and any dep source file that `import`s it is skipped at copy time. Use for a dependency that cannot link in the SwiftUI Preview executor (e.g. a prebuilt library-evolution Swift binary xcframework).",
+    ),
+    "replace_sources": attr.label_keyed_string_dict(
+        allow_files = [".swift"],
+        default = {},
+        doc = "Maps a replacement .swift file label to the basename of the dep source it replaces (the macro accepts the inverse basename -> label mapping). When a dep module's source matches the basename, the original is skipped and the replacement is copied in its place. Use to inject an excluded-module-free stub so files that still reference the dropped type keep compiling.",
     ),
     "ios_version": attr.string(default = "15"),
     "macos_version": attr.string(default = ""),
@@ -940,6 +978,8 @@ def create_swift_previews_macro(rule_fn):
             lib,
             extra_excludes = [],
             exclude_sources = [],
+            exclude_modules = [],
+            replace_sources = {},
             ios_version = "18",
             macos_version = "",
             tvos_version = "",
@@ -956,6 +996,9 @@ def create_swift_previews_macro(rule_fn):
             name: Target name (typically "previews")
             lib: The swift_library target to generate previews for
             extra_excludes: Additional directories/files to exclude from the main SPM target
+            exclude_sources: Source file names/suffixes to omit from the package
+            exclude_modules: Module names to fully exclude (no target/binaryTarget, stripped from all dependencies, dep sources importing them are skipped)
+            replace_sources: Dict mapping a dep source basename to a replacement .swift file label (e.g. {"EnvelopeMessageAdapter.swift": "//pkg:stub.swift"}); the original is skipped and the replacement copied in its place
             ios_version: iOS deployment target (default: "18")
             macos_version: macOS deployment target (empty to omit)
             tvos_version: tvOS deployment target (empty to omit)
@@ -971,6 +1014,8 @@ def create_swift_previews_macro(rule_fn):
             package_dir = native.package_name(),
             extra_excludes = extra_excludes,
             exclude_sources = exclude_sources,
+            exclude_modules = exclude_modules,
+            replace_sources = {label: basename for basename, label in replace_sources.items()},
             ios_version = ios_version,
             macos_version = macos_version,
             tvos_version = tvos_version,

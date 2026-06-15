@@ -326,6 +326,11 @@ def _main_target_scattered_sources_test_impl(ctx):
         '"Models/FoodCommonModels/FoodError.swift"]' in result,
     )
 
+    # `exclude` is still emitted alongside `sources`: SwiftPM auto-discovers
+    # resources across the whole path regardless of the sources list, so exclude
+    # is required to keep sibling resources out.
+    asserts.true(env, "exclude:" in result)
+
     return unittest.end(env)
 
 _main_target_scattered_sources_test = unittest.make(_main_target_scattered_sources_test_impl)
@@ -394,6 +399,42 @@ def _xcframework_binary_targets_test_impl(ctx):
 _xcframework_binary_targets_test = unittest.make(_xcframework_binary_targets_test_impl)
 
 # =============================================================================
+# Test: exclude_modules drops targets/binaryTargets and strips dependencies
+# =============================================================================
+
+def _exclude_modules_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    result = generate_package_swift(
+        name = "AppViews",
+        dep_modules = ["FeatureKit", "CourierCommonClient"],
+        resource_modules = [],
+        module_deps = {
+            "FeatureKit": ["CourierCommonClient"],
+            "CourierCommonClient": ["CourierProtos"],
+        },
+        xcframework_modules = ["CourierProtos"],
+        exclude_modules = ["CourierProtos"],
+    )
+
+    # No target or binaryTarget is emitted for the excluded module.
+    asserts.false(env, 'name: "CourierProtos"' in result)
+    asserts.false(env, '.deps/CourierProtos' in result)
+
+    # The excluded module is stripped from every other target's dependencies.
+    asserts.false(env, '"CourierProtos"' in result)
+
+    # Non-excluded targets are still present and still wired together.
+    asserts.true(env, 'name: "FeatureKit"' in result)
+    asserts.true(env, 'name: "CourierCommonClient"' in result)
+    asserts.true(env, 'dependencies: ["CourierCommonClient"]' in result)
+    asserts.true(env, 'dependencies: []' in result)
+
+    return unittest.end(env)
+
+_exclude_modules_test = unittest.make(_exclude_modules_test_impl)
+
+# =============================================================================
 # Test suite
 # =============================================================================
 
@@ -419,4 +460,5 @@ def package_generator_test_suite(name):
         _main_target_scattered_sources_test,
         _extra_excludes_relativized_test,
         _xcframework_binary_targets_test,
+        _exclude_modules_test,
     )

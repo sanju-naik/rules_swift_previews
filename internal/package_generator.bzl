@@ -16,6 +16,7 @@ def generate_package_swift(
     swift6_modules = None,
     detected_swift6_modules = None,
         extra_excludes = None,
+    exclude_modules = None,
     main_target_path = ".",
     main_target_sources = None,
         ios_version = "18",
@@ -34,6 +35,12 @@ def generate_package_swift(
         objc_modules: List of Objective-C module names
         xcframework_modules: List of XCFramework module names
         extra_excludes: Additional directories/files to exclude from main target
+        exclude_modules: Module names to drop entirely from the package. Each is
+            removed as a target/binaryTarget and stripped from every other
+            target's dependencies (it is filtered out of every module list, so
+            the all_modules set logic strips it everywhere). Use for a dependency
+            that cannot link in the SwiftUI Preview executor (e.g. a prebuilt
+            library-evolution Swift binary).
         main_target_path: Relative path to the main target sources
         main_target_sources: Optional explicit list of package-root-relative
             source paths for the main target. Set when the main module's sources
@@ -67,6 +74,21 @@ def generate_package_swift(
         detected_swift6_modules = []
     if extra_excludes == None:
         extra_excludes = []
+    if exclude_modules == None:
+        exclude_modules = []
+
+    # Drop fully-excluded modules from every module list. Because all downstream
+    # target emission and the all_modules dependency filter read these lists, an
+    # excluded module produces no target/binaryTarget and disappears from every
+    # other target's dependencies array.
+    exclude_set = {m: True for m in exclude_modules}
+    if exclude_set:
+        dep_modules = [m for m in dep_modules if m not in exclude_set]
+        resource_modules = [m for m in resource_modules if m not in exclude_set]
+        cc_modules = [m for m in cc_modules if m not in exclude_set]
+        objc_modules = [m for m in objc_modules if m not in exclude_set]
+        xcframework_modules = [m for m in xcframework_modules if m not in exclude_set]
+        binary_xcfw_modules = [m for m in binary_xcfw_modules if m not in exclude_set]
 
     swift6_set = {m: True for m in swift6_modules}
 
@@ -315,10 +337,15 @@ def generate_package_swift(
 
     main_is_swift6 = normalized_name in swift6_set or name in swift6_set
 
-    # When the main module's sources are scattered (path == "."), list every
-    # source explicitly so SwiftPM compiles exactly these files rather than
-    # scanning the whole package root (which would sweep in .deps and unrelated
-    # sibling directories that happen to live under the package).
+    # When the main module's sources are scattered (path == "."), emit an explicit
+    # per-file `sources` list so SwiftPM compiles exactly these files. We list
+    # files, not their parent directory: a directory entry makes SwiftPM scan the
+    # whole subtree, dragging in non-Swift resources and *+Previews.swift that the
+    # Bazel glob excludes. NOTE: `exclude` is still emitted alongside `sources` --
+    # `sources` only restricts which *source* files compile; SwiftPM still
+    # auto-discovers *resources* across the whole `path`, so `exclude` (extended
+    # via extra_excludes) is required to keep sibling resources out and avoid
+    # "multiple resources named ..." collisions.
     sources_line = None
     if main_target_sources:
         sources_entries = ", ".join(['"{}"'.format(s) for s in main_target_sources])

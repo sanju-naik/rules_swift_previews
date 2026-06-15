@@ -11,26 +11,69 @@ wrapper functions that work with Bazel File objects.
 # Pure string functions (easily unit testable)
 # =============================================================================
 
-def generate_copy_sources_script_from_paths(dep_dirs):
+def _excluded_import_grep_pattern(exclude_modules):
+    """ERE matching a top-level `import` of any excluded module.
+
+    Anchored at line start (allowing leading whitespace and import attributes
+    such as @_implementationOnly / @_exported) so commented-out imports do not
+    match. Also matches submodule (`import struct Foo.Bar`) and `import Foo`
+    forms. Returns "" when there is nothing to exclude.
+    """
+    if not exclude_modules:
+        return ""
+    alternation = "|".join(exclude_modules)
+    return "^[[:space:]]*(@[_a-zA-Z]+[[:space:]]+)*import[[:space:]]+([a-z]+[[:space:]]+)?({alt})([.[:space:]]|$)".format(
+        alt = alternation,
+    )
+
+def generate_copy_sources_script_from_paths(dep_dirs, exclude_modules = [], replace_sources = {}):
     """Generate script lines to copy dependency sources to .deps/.
 
     Pure function that takes string paths instead of File objects.
 
     Args:
         dep_dirs: dict mapping module_name -> list of source short_paths (strings)
+        exclude_modules: module names whose importing sources must be skipped.
+            File contents are unavailable during analysis, so each copy is
+            guarded by a runtime grep for a top-level `import <module>`.
+        replace_sources: dict mapping a source basename to a replacement source
+            short_path. When a dep source matches the basename, the original is
+            skipped and the replacement is copied under the original basename.
 
     Returns:
         List of shell script lines
     """
     lines = []
+    import_pattern = _excluded_import_grep_pattern(exclude_modules)
     for module_name, source_paths in dep_dirs.items():
         lines.append("# Copy {module} sources".format(module = module_name))
         lines.append('mkdir -p "$DEPS_DIR/{module}"'.format(module = module_name))
         for src_path in source_paths:
-            lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{module}/"'.format(
-                src = src_path,
-                module = module_name,
-            ))
+            basename = src_path.split("/")[-1]
+            if basename in replace_sources:
+                lines.append('cp "$RUNFILES_DIR/_main/{repl}" "$DEPS_DIR/{module}/{basename}"'.format(
+                    repl = replace_sources[basename],
+                    module = module_name,
+                    basename = basename,
+                ))
+                continue
+            if import_pattern and src_path.endswith(".swift"):
+                lines.append("if grep -qE '{pattern}' \"$RUNFILES_DIR/_main/{src}\"; then".format(
+                    pattern = import_pattern,
+                    src = src_path,
+                ))
+                lines.append('  echo "Skipping {src} (imports excluded module)"'.format(src = src_path))
+                lines.append("else")
+                lines.append('  cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{module}/"'.format(
+                    src = src_path,
+                    module = module_name,
+                ))
+                lines.append("fi")
+            else:
+                lines.append('cp "$RUNFILES_DIR/_main/{src}" "$DEPS_DIR/{module}/"'.format(
+                    src = src_path,
+                    module = module_name,
+                ))
         lines.append("")
     return lines
 
@@ -339,11 +382,14 @@ def generate_copy_xcframework_script_from_paths(xcframework_modules):
 # File object wrappers (used by rule implementation)
 # =============================================================================
 
-def generate_copy_sources_script(dep_dirs):
+def generate_copy_sources_script(dep_dirs, exclude_modules = [], replace_sources = {}):
     """Generate script lines to copy dependency sources to .deps/.
 
     Args:
         dep_dirs: dict mapping module_name -> list of source File objects
+        exclude_modules: module names whose importing sources must be skipped.
+        replace_sources: dict mapping a source basename to a replacement source
+            File. The original is skipped and the replacement copied in its place.
 
     Returns:
         List of shell script lines
@@ -352,7 +398,15 @@ def generate_copy_sources_script(dep_dirs):
         module_name: [src.short_path for src in sources]
         for module_name, sources in dep_dirs.items()
     }
-    return generate_copy_sources_script_from_paths(path_dict)
+    replace_path_dict = {
+        basename: f.short_path
+        for basename, f in replace_sources.items()
+    }
+    return generate_copy_sources_script_from_paths(
+        path_dict,
+        exclude_modules = exclude_modules,
+        replace_sources = replace_path_dict,
+    )
 
 def generate_copy_resources_script(resource_modules, main_module_name = "", dep_modules = []):
     """Generate script lines to copy resource files and generated source to .deps/<module>/.
