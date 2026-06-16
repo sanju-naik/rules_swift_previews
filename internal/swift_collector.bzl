@@ -7,6 +7,23 @@ This module handles collecting Swift source files from swift_library targets.
 """
 
 _SWIFT_RESOURCES_RULE_KIND = "swift_resources"
+_APPLE_RESOURCE_BUNDLE_RULE_KIND = "apple_resource_bundle"
+
+def _get_module_name(ctx, target):
+    if hasattr(ctx.rule.attr, "module_name") and ctx.rule.attr.module_name:
+        return ctx.rule.attr.module_name
+    if hasattr(target, "label"):
+        return target.label.name
+    return None
+
+def _dedupe_files(files):
+    seen = {}
+    deduped = []
+    for f in files:
+        if f.path not in seen:
+            seen[f.path] = True
+            deduped.append(f)
+    return deduped
 
 def collect_swift_sources(ctx, target):
     """Collect Swift source files from a target.
@@ -24,12 +41,7 @@ def collect_swift_sources(ctx, target):
     if not hasattr(ctx.rule.attr, "srcs"):
         return None
 
-    # Get module name
-    module_name = None
-    if hasattr(ctx.rule.attr, "module_name") and ctx.rule.attr.module_name:
-        module_name = ctx.rule.attr.module_name
-    elif hasattr(target, "label"):
-        module_name = target.label.name
+    module_name = _get_module_name(ctx, target)
 
     if not module_name:
         return None
@@ -45,6 +57,36 @@ def collect_swift_sources(ctx, target):
         return None
 
     return (module_name, swift_sources)
+
+def collect_apple_bundle_resources(ctx, target):
+    """Collect resource files from an apple_resource_bundle target.
+
+    Args:
+        ctx: The aspect context.
+        target: The target being analyzed.
+
+    Returns:
+        A tuple of (module_name, {resources: [...], generated_source: None}) if found,
+        or None if this is not an apple_resource_bundle target.
+    """
+    if ctx.rule.kind != _APPLE_RESOURCE_BUNDLE_RULE_KIND:
+        return None
+
+    module_name = target.label.name
+    if hasattr(ctx.rule.attr, "bundle_name") and ctx.rule.attr.bundle_name:
+        module_name = ctx.rule.attr.bundle_name
+
+    resource_files = []
+    for attr_name in ["resources", "structured_resources", "infoplists", "files"]:
+        if hasattr(ctx.rule.attr, attr_name):
+            for dep in getattr(ctx.rule.attr, attr_name):
+                resource_files.extend(dep.files.to_list())
+
+    resource_files = _dedupe_files(resource_files)
+    if not resource_files:
+        return None
+
+    return (module_name, {"resources": resource_files, "generated_source": None})
 
 def collect_swift_resources(ctx, target):
     """Collect resource files and generated source from a swift_resources target.

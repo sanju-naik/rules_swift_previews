@@ -7,11 +7,16 @@ Swift resource modules (swift_resources_library) are automatically detected
 via the aspect and their generated source files are included in the preview package.
 """
 
-load("//internal:core.bzl", _swift_previews_package = "swift_previews_package")
+load(
+    "//internal:core.bzl",
+    _swift_previews_gen = "swift_previews_gen",
+    _swift_previews_package = "swift_previews_package",
+)
 load("//internal:providers.bzl", _SourceFilesInfo = "SourceFilesInfo")
 
 SourceFilesInfo = _SourceFilesInfo
 swift_previews_package = _swift_previews_package
+swift_previews_gen = _swift_previews_gen
 
 # Files to exclude from production builds (preview-only files)
 SWIFT_PREVIEW_EXCLUDES = [
